@@ -1,0 +1,398 @@
+PROMPT: 1
+______________________________________________________________________
+
+RBAC Reimbursements app - Backend
+
+TECH STACK:
+  - JavaScript (No TypeScript)
+  - Node.js version >= 20.10.2
+  - Express.js
+  - PostgreSQL (local instance)
+  - Drizzle ORM
+  - drizzle-kit
+
+The most important feature of the application is Role-Based Access Control (RBAC).
+
+---------------------------------------------------------------------------------------
+ROLES:
+  1. EMP (Employee)
+    - Default role assigned to every newly registered user.
+
+  2. RM (Reporting Manager)
+    - A group of employees reports to one reporting manager.
+
+  3. APE (Accounts Payable Executive)
+    - Handles payable-side approvals.
+
+  4. CFO (Chief Financial Officer)
+    - Root user.
+    - Seeded during database seeding.
+    - Cannot be created through registration.
+    - No user can be promoted to CFO.
+    - Only one CFO exists in the system.
+
+  A user can have exactly one role at a time.
+
+---------------------------------------------------------------------------------------
+DATABASE STRUCTURE:
+- Use snake_case naming conventions for all database entities and columns.
+
+  TABLE: users
+    id                    string (primary key)
+    name                  string
+    email                 string (unique)
+    password              string (hashed using bcrypt)
+    role                  ENUM('EMP', 'RM', 'APE', 'CFO')
+    reporting_manager_id  string (nullable, foreign key -> users.id)
+
+Notes:
+  - All newly registered users are created with role = EMP.
+  - An EMP can have only one reporting manager.
+  - RM, APE, and CFO users will have reporting_manager_id = null.
+
+  TABLE: reimbursements
+    id                    string (primary key)
+    employee_id           string (foreign key -> users.id)
+    title                 string
+    description           string
+    amount                number
+    rm_approval           ENUM('PENDING', 'APPROVED', 'REJECTED')
+    ape_approval          ENUM('PENDING', 'APPROVED', 'REJECTED')
+    cfo_approval          ENUM('PENDING', 'APPROVED', 'REJECTED')
+    created_at            timestamp
+    updated_at            timestamp
+
+Notes:
+  - Do not store reimbursement status in the database.
+  - Status must be computed dynamically.
+
+---------------------------------------------------------------------------------------
+REIMBURSEMENT STATUS:
+- CFO can override rules
+- If: cfo_approval = APPROVED
+  then reimbursement status is: APPROVED
+  regardless of RM or APE decisions.
+- If: cfo_approval = REJECTED
+  then reimbursement status is: REJECTED
+  regardless of RM or APE decisions.
+
+NORMAL APPROVAL FLOW
+- If: cfo_approval = PENDING
+  then:
+    APPROVED when: rm_approval = APPROVED and ape_approval = APPROVED
+    REJECTED when: rm_approval = REJECTED or ape_approval = REJECTED
+    PENDING: Any other combination.
+
+---------------------------------------------------------------------------------------
+FOLDER STRUCTURE
+
+- index.js
+- package.json
+- readme.md
+- .gitignore
+- .env.example
+>routes/
+  - auth.routes.js
+  - employee.routes.js
+  - role.routes.js
+  - reimbursement.routes.js
+>controllers/
+  - auth.controller.js
+  - employee.controller.js
+  - role.controller.js
+  - reimbursement.controller.js
+>services/
+  - auth.service.js
+  - employee.service.js
+  - role.service.js
+  - reimbursement.service.js
+>middlewares/
+  - auth.middleware.js
+  - role.middleware.js
+  - error.handler.js
+>dto/
+  - auth.dto.js
+  - employee.dto.js
+  - role.dto.js
+  - reimbursement.dto.js
+>config/
+  - db.config.js
+  - jwt.config.js
+>db/
+  - schema.js
+  - seed.js
+  >migrations/
+
+
+---------------------------------------------------------------------------------------
+REQUIRED NPM SCRIPTS:
+
+- Start Application: npm run dev
+    - Must start the backend server.
+    - Must run strictly on port 7002.
+
+- Database Migration: npm run db:migrate
+    - Creates all required tables and schema on the tester's system.
+
+- Seed Data: npm run db:seed-data
+    - Seeds ONLY the CFO account.
+    - No additional seed data.
+
+---------------------------------------------------------------------------------------
+DEPENDENCIES:
+express
+dotenv
+bcrypt
+jsonwebtoken
+cookie-parser
+cors
+zod
+drizzle-orm
+drizzle-kit
+pg
+
+---------------------------------------------------------------------------------------
+CFO SEED CREDENTIALS:
+email: [cfo@org.com](mailto:cfo@org.com)
+password: CFO#ORG@April2026
+role: CFO
+
+Password must be stored as a bcrypt hash.
+
+---------------------------------------------------------------------------------------
+
+AUTHENTICATION REQUIREMENTS:
+
+- Use JWT authentication.
+- Requirements:
+  - Cookie-based authentication.
+  - JWT token generated during login.
+  - JWT stored in HTTP-only cookies.
+  - Protected endpoints must validate JWT through middleware.
+  - Authorization must be role-based using dedicated role middleware.
+
+---------------------------------------------------------------------------------------
+
+REQUEST FLOW:
+
+Client -> Router -> DTO Middleware (Zod Validation) -> Controller -> Service -> Controller -> Response
+
+---------------------------------------------------------------------------------------
+
+API RULES
+
+All endpoints must be prefixed with: /rest
+
+
+PUBLIC ENDPOINTS
+---------------------------------------------------------------------------------------
+
+POST /rest/onboardings/register
+
+- Creates a new employee account.
+- Request Body:
+    {
+      name: string,
+      email: string,
+      password: string
+    }
+- Create a new user.
+- Assign role = EMP.
+- reporting_manager_id = null.
+- Hash password using bcrypt before storage.
+- Response:
+  {
+    success: boolean,
+    message: string (User registered successfully)
+  }
+
+---------------------------------------------------------------------------------------
+POST /rest/onboardings/login
+
+- Request Body:
+    {
+      email: string,
+      password: string
+    }
+- Validate credentials.
+- Generate JWT.
+- Set JWT in HTTP-only cookie.
+- Response:
+    {
+      success: boolean,
+      token: string (jwt-token),
+      message: string (Login successful)
+    }
+
+---------------------------------------------------------------------------------------
+POST /rest/onboardings/logout
+
+- Read JWT from cookie.
+- Clear authentication cookie.
+- Response:
+  {
+    success: boolean,
+    message: string (Logged out successfully)
+  }
+
+---------------------------------------------------------------------------------------
+PROTECTED ENDPOINTS
+
+POST /rest/roles/assign
+- Assigns a role to a user.
+- Access: CFO only
+- Request Body:
+    {
+      userId: user-id,
+      role: RM
+    }
+- Allowed Roles:
+  - EMP
+  - RM
+  - APE
+
+Notes:
+- CFO cannot assign another user as CFO.
+- A user can only have one role.
+
+---------------------------------------------------------------------------------------
+GET /rest/employees
+
+Access:
+  - EMP: Not allowed.
+  - RM: Returns all employees reporting directly to that RM.
+  - APE: Returns all EMP and RM users.
+  - CFO: Returns all users except the CFO account itself.
+  - Response:
+      {
+        status: success,
+        data: {
+          users: [
+            {
+              userId: string,
+              name: string,
+              email: string,
+              role: string
+            }
+          ]
+        }
+      }
+
+---------------------------------------------------------------------------------------
+POST /rest/employees/assign
+- Assign an employee to a reporting manager.
+- Access: CFO only
+- Request Body:
+  {
+    employeeId: employee-id,
+    reportingManagerId: manager-id
+  }
+- Employee must have role EMP.
+- Reporting manager must have role RM.
+
+---------------------------------------------------------------------------------------
+DELETE /rest/employees/assign
+- Remove an employee-reporting manager relationship.
+- Access: CFO only
+- Request Body:
+  {
+    employeeId: employee-id,
+    reportingManagerId: manager-id
+  }
+
+---------------------------------------------------------------------------------------
+POST /rest/reimbursements
+- Create a reimbursement.
+- Access: EMP only
+- Request Body:
+  {
+    title: string,
+    description: string,
+    amount: number
+  }
+  rm_approval = PENDING
+  ape_approval = PENDING
+  cfo_approval = PENDING
+
+---------------------------------------------------------------------------------------
+PATCH /rest/reimbursements
+- Approve or reject a reimbursement.
+- Access:
+  - RM
+  - APE
+  - CFO
+- Request Body:
+  {
+    reimbursementId: string(reimbursement-id),
+    status: string(APPROVED)
+  }
+
+- Allowed Values:
+  - APPROVED
+  - REJECTED
+
+Rules:
+  RM:
+    - Can act only on reimbursements belonging to direct subordinates.
+    - Updates rm_approval.
+  APE:
+  - Updates ape_approval.
+  CFO:
+    - Can act on any reimbursement at any time.
+    - Updates cfo_approval.
+EMP users cannot modify reimbursements after creation.
+
+---------------------------------------------------------------------------------------
+GET /rest/reimbursements
+EMP:
+ - Returns own reimbursements.
+RM:
+ - Returns reimbursements belonging to direct subordinates.
+APE:
+  - Returns reimbursements where:
+    rm_approval = APPROVED and ape_approval = PENDING
+CFO:
+  - Returns reimbursements where:
+    ape_approval = APPROVED and cfo_approval = PENDING
+- Response:
+    {
+      status: success,
+      data: {
+        reimbursements: [
+          {
+            id: string,
+            title: string,
+            description: string,
+            amount: number,
+            status: string(APPROVED)
+          }
+        ]
+      }
+    }
+
+Status must be computed dynamically.
+
+---------------------------------------------------------------------------------------
+GET /rest/reimbursements/:userId
+Access:
+  - RM: Can view reimbursements only for direct subordinate employees.
+  - APE: Can view reimbursements belonging to any EMP reporting under any RM.
+  - CFO: Can view reimbursements of any employee.
+  - EMP: Not allowed.
+  - Response:
+    {
+      status: success,
+      data: {
+        reimbursements: [
+          {
+            id: string,
+            title: string,
+            description: string,
+            amount: number,
+            status: string(APPROVED)
+          }
+        ]
+      }
+    }
+
+Status must be computed dynamically.
